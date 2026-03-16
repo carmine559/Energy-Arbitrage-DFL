@@ -60,14 +60,14 @@ Tested on an out-of-sample operational simulation, the DFL architecture vastly o
     ```bash
     Execute the main.ipynb Jupyter Notebook sequentially to reproduce the data ingestion, training, and financial evaluation.
 
-## Repository Structure
-``` 
-    ├── images/                 # Saved plots (Autoencoder MSE, SHAP summary, Profit curves)
-    ├── main.ipynb              # Core pipeline (Data ingestion, ML, PyTorch DFL)
-    ├── report.pdf              # Project report with analysis and results of the DFL architecture
-    ├── requirements.txt        # Python dependencies
-    └── README.md               # Project documentation
-
 ## Authors
-* **Carmine Santella** - [Your LinkedIn](https://www.linkedin.com/in/carmine-santella/) | [Your GitHub](https://github.com/carmine559)
-* **Tommaso Bernardini** - [Collaborator LinkedIn](https://www.linkedin.com/in/tommaso-bernardini-35a409348/) | [Collaborator GitHub](https://github.com/t0mm4s02)
+* **Carmine Santella** - (https://www.linkedin.com/in/carmine-santella/) | (https://github.com/carmine559)
+* **Tommaso Bernardini** - (https://www.linkedin.com/in/tommaso-bernardini-35a409348/) | (https://github.com/t0mm4s02)
+
+## Repository Structure
+   ``` bash
+   ├── images/                 # Saved plots (Autoencoder MSE, SHAP summary, Profit curves)
+   ├── main.ipynb              # Core pipeline (Data ingestion, ML, PyTorch DFL)
+   ├── report.pdf              # Project report with analysis and results of the DFL architecture
+   ├── requirements.txt        # Python dependencies
+   └── README.md               # Project documentation
