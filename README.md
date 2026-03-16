@@ -1,11 +1,11 @@
-# ⚡ Prescriptive AI for Energy Arbitrage: Decision-Focused Learning (DFL)
+#  Prescriptive AI for Energy Arbitrage: Decision-Focused Learning (DFL)
 
 ![Python](https://img.shields.io/badge/Python-3.8%2B-blue)
 ![PyTorch](https://img.shields.io/badge/PyTorch-Deep%20Learning-EE4C2C)
 ![XGBoost](https://img.shields.io/badge/XGBoost-Predictive%20ML-000000)
 ![License](https://img.shields.io/badge/License-MIT-green)
 
-## 📖 Executive Summary
+## Executive Summary
 This repository contains an end-to-end **Prescriptive Artificial Intelligence pipeline** designed to optimize industrial battery arbitrage (e.g., Lithium-Ion Megapacks) in the Day-Ahead European energy market. 
 
 We challenge the standard **Predict-then-Optimize (PFL)** paradigm, demonstrating that minimizing predictive errors (MSE) leads to sub-optimal financial decisions. Instead, we implement a **Decision-Focused Learning (DFL)** architecture in PyTorch, aligning the neural network's loss function directly with the downstream business utility (Financial Regret) while respecting physical degradation constraints (Levelized Cost of Storage - LCOS).
@@ -69,5 +69,5 @@ Tested on an out-of-sample operational simulation, the DFL architecture vastly o
     └── README.md               # Project documentation
 
 ## Authors
-* **Your Name** - [Your LinkedIn](https://www.linkedin.com/in/carmine-santella/) | [Your GitHub](https://github.com/carmine559)
-* **Collaborator Name** - [Collaborator LinkedIn](https://www.linkedin.com/in/tommaso-bernardini-35a409348/) | [Collaborator GitHub](https://github.com/t0mm4s02)
+* **Carmine Santella** - [Your LinkedIn](https://www.linkedin.com/in/carmine-santella/) | [Your GitHub](https://github.com/carmine559)
+* **Tommaso Bernardini** - [Collaborator LinkedIn](https://www.linkedin.com/in/tommaso-bernardini-35a409348/) | [Collaborator GitHub](https://github.com/t0mm4s02)
