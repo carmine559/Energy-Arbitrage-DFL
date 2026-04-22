@@ -1,0 +1,493 @@
+\documentclass[11pt,a4paper]{article}
+
+% ---------- packages ----------
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[english]{babel}
+\usepackage{microtype}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage[hidelinks]{hyperref}
+\usepackage{titlesec}
+\usepackage{parskip}
+\usepackage{eurosym}
+
+% ---------- fine-tuning ----------
+\setlength{\parindent}{0pt}
+\titleformat*{\section}{\Large\bfseries}
+\titleformat*{\subsection}{\large\bfseries}
+\titleformat*{\subsubsection}{\normalsize\bfseries}
+
+\newcommand{\code}[1]{\allowbreak\texttt{\small #1}\allowbreak}
+
+% allow slightly loose typesetting for long inline monospace identifiers
+\emergencystretch=3em
+
+% ---------- meta ----------
+\title{\textbf{A3I Project --- Final Report}\\[0.3em]
+\large Day-Ahead Price Prediction and Battery Arbitrage\\
+on the IT\_NORD Bidding Zone}
+\author{}
+\date{}
+
+\begin{document}
+\maketitle
+
+% ---------- 1. Executive Summary ----------
+\section{Executive Summary}
+
+Italian electricity prices on the IT\_NORD day-ahead market move with a
+combination of meteorological drivers (solar radiation, wind, temperature),
+calendar effects (daily and weekly demand cycles) and autoregressive
+inertia. When a battery-storage operator has even a reasonable guess of
+tomorrow's 24 hourly prices, they can turn that forecast into cash by
+charging at the low hours and discharging at the high ones --- as long as
+the spread covers the physical wear-and-tear of a charge/discharge cycle,
+known in the industry as the Levelized Cost of Storage (LCOS).
+
+This project delivers an end-to-end pipeline that goes from the raw
+public data (ENTSO-E prices, Open-Meteo weather) all the way to an
+operational trading policy for a 1\,MWh battery. The final policy is
+trained with \emph{Decision-Focused Learning} (DFL), which directly
+optimizes the quantity that matters --- the net profit after LCOS ---
+rather than the statistical accuracy of the price forecast.
+
+Three technical contributions hold the project together:
+
+\begin{itemize}[leftmargin=1.5em]
+  \item \textbf{An autoencoder trained on the quiet 2019--2020 market}
+    identifies the 2021--2022 regime shift as a sustained spike in
+    reconstruction error. No labels and no hand-picked crisis dates are
+    needed; the anomaly falls out of the data.
+
+  \item \textbf{An XGBoost price model}, evaluated on a genuine
+    2024--2025 hold-out, is analyzed with permutation importance, SHAP
+    (global and local) and Boruta's hypothesis-testing procedure. The
+    analysis confirms that the model has internalized the
+    \emph{merit-order effect} --- renewable generation cannibalising
+    wholesale prices --- and lets us defend the claim that each retained
+    feature carries genuine information rather than a spurious
+    correlation.
+
+  \item \textbf{A DFL battery-arbitrage policy} trained with a
+    softmax-relaxed regret loss that folds LCOS into the training
+    objective. Compared to the standard predict-then-optimize baseline
+    on the same 2024--2025 hold-out, the DFL policy delivers a higher
+    net profit while making fewer trades, i.e.\ it absorbs the LCOS more
+    effectively.
+\end{itemize}
+
+
+% ---------- 2. Problem Setting ----------
+\section{Problem Setting}
+
+\subsection{The market}
+The Italian day-ahead market clears one price per hour, per bidding
+zone. IT\_NORD covers the industrial heartland of the country and is the
+largest zone by traded volume. Wholesale clearing follows the standard
+\emph{merit-order}: the cheapest generators (typically renewable, with
+near-zero marginal cost) are dispatched first, and the price settles at
+the marginal cost of the last plant called into service. The mechanism
+implies two properties that our model will need to learn:
+
+\begin{itemize}[leftmargin=1.5em]
+  \item \textbf{Strong autoregressive persistence.} Industrial load
+    cycles are sticky --- today's 18:00 price looks a lot like
+    yesterday's 18:00 price. A shock propagates for days.
+  \item \textbf{Asymmetric price response to weather.} A sunny day in
+    July depresses mid-day prices because solar cannibalizes the
+    dispatch stack; the same radiation level at 03:00 has no effect
+    because solar is dark. The two inputs \emph{interact}.
+\end{itemize}
+
+\subsection{The operator's problem}
+For a battery operator, the day-ahead market defines a daily arbitrage
+game. Given a point forecast $\hat{y}\in\mathbb{R}^{24}$ of tomorrow's
+24 hourly prices, the operator chooses one charge hour $h_c$ and one
+discharge hour $h_d$. The realized profit is
+\[
+\pi = y_{h_d} - y_{h_c} - C_{deg}
+\]
+if we decide to trade, and $0$ if we stay idle (the LCOS penalty is only
+paid when the battery actually cycles). The \emph{optimal} decision is
+to trade whenever the realized spread covers the LCOS:
+\[
+\pi^{*} \;=\; \max\!\left(0,\;\; \max_{h} y_{h} - \min_{h} y_{h} - C_{deg}\right).
+\]
+The gap between $\pi$ (what we actually earn, using the forecast) and
+$\pi^{*}$ (what an oracle with perfect foresight would earn) is the
+\emph{regret}. Classical ML minimizes the forecast error; our pipeline
+minimizes the regret directly.
+
+\subsection{Why this is a two-stage problem}
+The course lecture \code{02\_\_Limitations\_and\_Opportunities.ipynb}
+makes a sharp point: \textbf{for purely linear cost functions with
+uncertain coefficients, a well-specified predict-then-optimize model
+already converges to the optimum --- so DFL offers little.} Where DFL
+genuinely pays off is in \emph{two-stage stochastic optimization}, where
+the cost is non-linear in the uncertain parameter because of recourse
+actions (here: the idle option, which is a discrete non-linearity in
+$y$).
+
+Battery arbitrage with LCOS is precisely that. Our DFL formulation folds
+$C_{deg}$ into the training loss, so the network learns to produce
+forecasts whose implied trading decision is decision-relevant, not just
+statistically close.
+
+
+% ---------- 3. Data and Features ----------
+\section{Data and Features}
+
+\subsection{Sources}
+\begin{center}
+\begin{tabular}{@{}lllc@{}}
+\toprule
+\textbf{Source} & \textbf{Variables} & \textbf{Period} & \textbf{Resolution} \\
+\midrule
+ENTSO-E    & Day-ahead price IT\_NORD (EUR/MWh)               & 2019--2025 & Hourly \\
+Open-Meteo & Temperature (2 m), direct radiation, wind (10 m) & 2019--2025 & Hourly \\
+\bottomrule
+\end{tabular}
+\end{center}
+Both sources are aligned strictly on UTC; Rome-local timestamps would
+have introduced DST artifacts that propagate into the daily-cycle
+features.
+
+\subsection{Engineered features}
+The feature set passed to XGBoost is summarized in
+Table~\ref{tab:features}.
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{3cm}>{\raggedright\arraybackslash}p{6cm}>{\raggedright\arraybackslash}p{6cm}@{}}
+\toprule
+\textbf{Group} & \textbf{Features} & \textbf{Rationale} \\
+\midrule
+Weather & Temperature\_C, \code{Solar\_Radiation\_W}, \code{Wind\_Speed\_ms}
+              & Merit-order + thermal demand \\
+Calendar (raw)& {Is\_Weekend} & Industrial demand drop on Sat--Sun \\
+Calendar (cyc)& {Hour\_Sin}, \code{Hour\_Cos}, \code{Month\_Sin}, \code{Month\_Cos}
+              & Continuous wrap-around at midnight and end-of-year \\
+Autoregressive & {Price\_Lag\_24h}, \code{Price\_Lag\_168h}, \code{Price\_Rolling\_Mean\_24h}
+              & Daily + weekly persistence; rolling on the lag, not target \\
+\bottomrule
+\end{tabular}
+\caption{Feature groups passed to the XGBoost price model.}
+\label{tab:features}
+\end{table}
+
+The rolling mean is computed on \code{Price\_Lag\_24h} rather than on
+the target itself --- the standard trick to avoid look-ahead bias.
+Cyclical encoding of hour and month matters for tree-based learners
+because it puts hour~23 next to hour~0 on the unit circle, which ordinal
+encoding does not.
+
+
+% ---------- 4. Autoencoder ----------
+\section{Anomaly Detection via Autoencoder}
+
+A shallow autoencoder ($5\!\to\!16\!\to\!8\!\to\!3\!\to\!8\!\to\!16\!\to\!5$)
+is trained on the quiet years 2019--2020 with the five-dimensional
+state vector (price, three weather features, \code{Price\_Lag\_24h}) as
+both input and target. The bottleneck forces the network to learn only
+the ``normal'' manifold.
+
+At inference time we run the trained encoder-decoder on the full
+2019--2025 dataset and compute the per-row reconstruction MSE. A
+seven-day rolling mean of the MSE gives a smoothed \emph{anomaly score}.
+A threshold set at the 99th percentile of the training-period MSE marks
+any sustained excursion above it as a structural anomaly.
+
+The score stays flat through 2019--2020, climbs through late 2021, and
+peaks in autumn 2022 --- the point in time when European gas prices,
+driven by the supply shock, reset the entire wholesale electricity
+stack. The model picks this up \emph{without} ever having been told
+about the gas crisis; the anomaly falls out of the reconstruction error
+alone.
+
+\paragraph{Operational use.} An operator could run this score live: when
+it crosses the threshold, retrain or flag the downstream forecasting
+model for close monitoring, since it was trained under an implicit
+stationarity assumption that the market is about to break.
+
+
+% ---------- 5. XGBoost ----------
+\section{Price Prediction with XGBoost}
+
+\subsection{Set-up}
+A chronological split is used: 2019--2023 for training (with the last
+10\% carved off for early stopping), 2024--2025 for the hold-out.
+Random splits would contaminate the training set with future
+information and inflate the reported metrics. The model is an
+\code{XGBRegressor} with 500 trees (early-stopped), learning rate
+$0.05$, max depth $6$.
+
+On the 2024--2025 hold-out, the model obtains an MAE of roughly 12--15
+\euro/MWh depending on the run (the exact number is reproducible with the
+fixed seed in the notebook). That is materially better than a na\"ive
+persistence baseline (predict today = yesterday), which hovers around
+25 \euro/MWh MAE on the same window.
+
+\subsection{Feature selection analysis}
+Three complementary techniques, drawn from the course notebooks
+\code{3\_\_Using\_a\_Non-Linear\_Model}, \code{4\_\_Additive\_Feature\_Attribution}
+and \code{5\_\_All\_Relevant\_Feature\_Selection}, are applied in the
+\code{Feature\_Selection\_Module.ipynb} companion notebook.
+
+\paragraph{Permutation importance on the test set.}
+Computed with \code{permutation\_importance} from
+\code{sklearn.inspection}, $n=30$ repeats, scored in RMSE. The ranking
+that comes out is dominated by the autoregressive features
+(\code{Price\_Lag\_24h}, \code{Price\_Rolling\_Mean\_24h},
+\code{Price\_Lag\_168h}) followed by \code{Solar\_Radiation\_W} and the
+cyclical hour features, with \code{Is\_Weekend} trailing. Error bars
+give us a principled way to identify features whose importance cannot
+be distinguished from zero.
+
+\paragraph{SHAP, global and local.}
+The mean-$|$SHAP$|$ bar plot agrees with the permutation ranking. The
+beeswarm plot adds sign information: high lag prices push the forecast
+up monotonically (as expected for persistence), while high solar
+radiation pushes it down. The dependency plot of
+\code{Solar\_Radiation\_W} coloured by \code{Hour\_Sin} is the most
+informative single figure in the whole analysis: the negative
+contribution of solar is strongly modulated by the hour of day, with
+the effect concentrated in daylight hours. This is the merit-order
+effect --- recovered automatically by the model from raw inputs,
+without the modeller hand-coding it.
+
+\paragraph{Boruta.}
+BorutaPy is run with the XGBoost backbone, 50 iterations. Each real
+feature is tested against its \emph{shadow} (a shuffled copy of itself)
+under the null hypothesis that its importance is no greater than what
+chance alone would produce. The procedure returns three buckets:
+\textbf{confirmed relevant}, \textbf{tentative}, and \textbf{rejected}.
+On our data, the autoregressive features and the
+weather-plus-cyclical-time bundle are confirmed; \code{Is\_Weekend}
+typically lands in the tentative band, which is consistent with its
+signal being already partially absorbed by \code{Price\_Lag\_168h} ---
+the mediator / redundancy phenomenon described in the last lecture of the Explainable block.
+
+\paragraph{Minimal-set sanity check.}
+Starting from the permutation-importance ranking, we retrain the
+XGBoost on progressively smaller subsets. The test RMSE drops fast in
+the first 3--5 features (lags + rolling mean + solar + one cyclical
+hour), then plateaus. A deployment-oriented model could drop the
+weakest 2--3 features without measurable accuracy loss, which would
+halve feature-engineering cost at inference time.
+
+\subsection{What feature selection bought us}
+Two concrete things:
+
+\begin{itemize}[leftmargin=1.5em]
+  \item \textbf{Defensibility.} The XGBoost model is not just accurate,
+    it is \emph{interpretable}: we can point at each retained feature
+    and present either a SHAP plot or a Boruta hypothesis test that
+    justifies keeping it. This matters the moment a trading desk or a
+    regulator asks ``why did your model recommend that trade?''.
+
+  \item \textbf{Cleaner downstream inputs.} The DFL battery-net in
+    Section~\ref{sec:dfl} takes the 24 lagged prices as inputs; the
+    feature-selection analysis tells us the rolling mean adds little
+    beyond the raw lags, which guides any future extension of the DFL
+    input set.
+\end{itemize}
+
+
+% ---------- 6. DFL ----------
+\section{Decision-Focused Learning for Battery Arbitrage}\label{sec:dfl}
+
+\subsection{Architecture}
+A single-hidden-layer MLP ($24\!\to\!64\!\to\!24$) takes yesterday's 24
+hourly prices (standardized with training-only statistics) and outputs
+tomorrow's 24 price forecast. Two copies of the same architecture are
+trained with different losses.
+
+\begin{itemize}[leftmargin=1.5em]
+  \item \textbf{PFL} --- plain MSE between predicted and true hourly
+    prices. The LCOS idle rule is applied only at evaluation time, by
+    checking whether the \emph{predicted} spread exceeds $C_{deg}$.
+    This is what PFL \emph{is} by construction.
+
+  \item \textbf{DFL} --- a softmax-relaxed regret with LCOS folded into
+    the training loss. Writing
+    $p^{dis}_{h}=\operatorname{softmax}(\hat y)_{h}$ and
+    $p^{ch}_{h}=\operatorname{softmax}(-\hat y)_{h}$:
+    \[
+    \mathcal{L}_{\mathrm{DFL}}
+      = \mathbb{E}\!\left[
+          \pi^{*}\;-\;\operatorname{softplus}\!\Bigl(
+            \textstyle\sum_{h}(p^{dis}_{h}-p^{ch}_{h})\,y_{h}\;-\;C_{deg}
+          \Bigr)
+        \right]
+      + \lambda\,\mathbb{E}\!\left[\textstyle\sum_{h}p^{dis}_{h}\,p^{ch}_{h}\right].
+    \]
+    The first term is the oracle profit minus the soft-ReLU of the
+    expected spread net of LCOS --- making the idle option a
+    \emph{differentiable} choice. The second is a small collision
+    penalty that discourages the model from placing discharge mass and
+    charge mass on the same hour.
+\end{itemize}
+
+\subsection{Relation to the course's canonical DFL losses}
+The lecture notes discuss three families of differentiable surrogates:
+SPO+, self-contrastive, and softmax / perturbed-optimizer relaxations.
+Our loss sits in the third family. It is \textbf{not} the Score Function
+Gradient Estimator: SFGE (REINFORCE) would require sampling a discrete
+action and using the log-derivative trick, whereas here the expectation
+is computed in closed form via the softmax weights.
+
+\subsection{Evaluation}
+The daily tensor is split chronologically: days from 2019 through 2023
+go to training, days from 2024 through 2025 go to the hold-out. Both
+models train for 250 epochs with Adam at lr~$=10^{-2}$. At evaluation
+time the discrete $\operatorname{argmax}$~/~$\operatorname{argmin}$ are
+recovered from the point forecasts, the LCOS idle rule is applied to
+both models, and profits are summed over the test days in euros (1~MWh
+nominal battery).
+
+On the hold-out we observe:
+
+\begin{itemize}[leftmargin=1.5em]
+  \item \textbf{PFL} captures the clear-cut days where the spread far
+    exceeds LCOS, but frequently takes trades in marginal conditions
+    where the realized spread falls just short --- its forecast
+    regresses to the mean and underestimates volatility.
+  \item \textbf{DFL} converges to a policy that is simultaneously
+    \emph{more selective} (it trades less often on flat days) and
+    \emph{more aggressive} (it captures the largest spreads more
+    reliably). The net result is a higher cumulative profit over the
+    test horizon, despite trading fewer days in total.
+\end{itemize}
+
+The cumulative-profit plot in the notebook shows the DFL curve
+consistently above the PFL curve, with both well below the oracle ---
+as expected, since the oracle has perfect foresight.
+
+\subsection{Sensitivity and optimization-protocol analysis}
+To probe the sensitivity of the DFL-vs-PFL comparison to both $C_{deg}$ and the neural-network random initialization, we ran four optimization protocols across $C_{deg} \in \{5, 10, 15, 20, 25, 30, 40\}$ \euro/MWh with five seeds per configuration: cold-start DFL (random init, 250 epochs at lr $10^{-2}$), warm-start DFL (initialized from the trained PFL weights, refined at lr $10^{-3}$), and two hybrid protocols that anneal the training loss linearly from pure MSE to pure regret over 400 epochs, with and without an amplification factor on the regret term.
+
+Cold-start DFL dominates PFL on average, with the advantage peaking at roughly \euro5k in the central $C_{deg}$ range, but with seed-to-seed standard deviation of the same order as the mean. The three MSE-anchored protocols (warm-start, hybrid, amplified hybrid) all collapse to PFL for $C_{deg} \leq 25$
+\euro/MWh — not because the networks fail to differ from PFL (we measured per-hour prediction differences of up to \euro 8/MWh) but because they make identical charge/discharge hour choices on nearly every test day. Increasing the regret term's weight by a factor of 20 in the hybrid protocol did not change this, indicating that the PFL optimum is a decision-local minimum from which small regret gradients cannot escape, regardless of their magnitude. At $C_{deg} \geq 30$
+\euro/MWh all three MSE-anchored protocols recover a small ($\sim$\euro500) but stable advantage, the range in which the idle-vs-trade decision begins to dominate and the regret landscape diverges measurably from MSE's.
+
+The combined picture is that on this problem the regret loss landscape is shaped by the discrete ordering of hourly prices, which is easy to get right on most days; MSE-basin solutions are therefore decision-optimal for most days even when their values are imperfect, and genuine DFL-driven decision changes require escape from the MSE basin — which costs seed variance. A deployed DFL pipeline on day-ahead arbitrage would accordingly either ensemble multiple cold-start runs to average over that variance, or restrict DFL to the high-$C_{deg}$ regime where warm-started refinement yields a modest but stable improvement. This behavior echoes the theoretical observation in the first lecture about DFL that regret is piecewise-constant by construction and admits multiple local minima.
+
+% ---------- 7. Limitations ----------
+\section{Limitations and Honest Caveats}
+
+\begin{itemize}[leftmargin=1.5em]
+  \item \textbf{Battery model is minimal.} We model a 1\,MWh /
+    1~cycle-per-day battery with a scalar LCOS and no state of charge,
+    efficiency losses, or ramp constraints. A production model would be
+    a more involved mixed-integer linear program; the DFL
+    \emph{principle} carries over, but the training loop would need a
+    differentiable solver or a black-box surrogate for the MILP.
+
+  \item \textbf{Single bidding zone.} The model is trained and
+    evaluated on IT\_NORD only. Cross-zonal arbitrage and transmission
+    constraints are out of scope.
+
+  \item \textbf{No intra-day or balancing markets.} The real trading
+    stack for a battery operator includes the intra-day continuous
+    market and the ancillary-services / balancing markets, often with
+    higher volatilities than day-ahead. Our pipeline only addresses the
+    day-ahead leg, which is typically the base layer of an operator's
+    strategy but not the whole of it.
+
+  \item \textbf{Regime-shift robustness.} We flagged the 2021--2022
+    crisis with the autoencoder, but we did not retrain separate models
+    per regime. A deployed system should at minimum re-fit on rolling
+    windows and treat autoencoder alarms as triggers for retraining.
+\end{itemize}
+
+
+% ---------- 8. Usefulness ----------
+\section{What This Project Is Useful For}
+
+The pipeline produces four artefacts that are useful in distinct
+operational contexts.
+
+\paragraph{1. A battery-arbitrage decision-support tool.}
+For an operator running a grid-scale battery on the IT\_NORD market,
+the DFL policy gives a daily charge-hour / discharge-hour recommendation
+with an explicit idle option when the expected spread does not cover
+LCOS. The model runs on free public data (ENTSO-E + Open-Meteo) and
+fits in under ten seconds of inference per day on a laptop; it is
+immediately deployable as a morning briefing, as a first draft for a
+human trader to approve, or as the inner loop of an automated bidder.
+
+\paragraph{2. A market-monitoring early-warning system.}
+The autoencoder anomaly score, run live on the rolling 7-day window,
+gives a single number that summarizes how far the market currently is
+from its ``normal'' 2019--2020 manifold. A trading desk can use it as a
+sanity check on any short-horizon forecast: a forecast produced during
+a reconstruction-error spike deserves extra scepticism, and any
+automated policy trained on pre-shock data should be re-examined or
+paused.
+
+\paragraph{3. A transparent, regulator-ready explanation layer.}
+The XGBoost price model, combined with the SHAP dependency plots and
+the Boruta relevance report, constitutes an explainability bundle that
+can be submitted to a regulator or an internal compliance team. The
+bundle answers both global (``which features matter?'') and local
+(``why did the model recommend this trade, on this day?'') questions,
+using the same mathematical primitives (Shapley values, hypothesis
+testing) that are acceptable in both academic and regulated settings.
+
+\paragraph{4. A pedagogical template for the
+predict-then-optimize vs decision-focused question.}
+The side-by-side PFL~/~DFL training loop, run on a real market problem
+rather than a synthetic toy, demonstrates concretely the point made in
+\code{02\_\_Limitations\_and\_Opportunities.ipynb}: DFL earns its keep
+in two-stage problems with recourse actions, and here the idle option
+is exactly that kind of non-linearity.
+
+\bigskip
+Beyond the narrow use case of battery arbitrage, the same pipeline
+skeleton --- public data ingestion, cyclical + autoregressive feature
+engineering, autoencoder-based regime detection, explainable tree
+model, DFL for a downstream decision --- ports cleanly to adjacent
+problems: demand-response scheduling, EV-fleet charging optimization,
+district-heating dispatch, or industrial peak shaving. All of these
+share the same structure (predict an hourly profile $\rightarrow$ take
+a discrete decision at the low/high of the profile, with a fixed cost
+for acting), and therefore benefit from the same DFL treatment.
+
+
+% ---------- 9. Deliverables ----------
+\section{Deliverables}
+
+\begin{itemize}[leftmargin=1.5em]
+  \item \code{main\_restructured.ipynb} --- the end-to-end pipeline
+    from data ingestion to the DFL evaluation.
+  \item \code{Final\_Report.tex} (this document) --- the write-up of the project, with a structured presentation of the
+    problem, the methods, the results, and the limitations.
+\end{itemize}
+
+
+% ---------- 10. Closing ----------
+\section{Closing Remarks}
+
+The project demonstrates that aligning the machine-learning loss with
+the downstream operational utility --- regret minimization under LCOS
+--- yields an honestly better trading policy than a standard MSE-driven
+forecaster, on held-out days and under a reasonable cost assumption.
+The accompanying feature-selection analysis makes the price model
+itself interpretable and defensible, with mean-$|$SHAP$|$, permutation
+importance, and Boruta hypothesis tests all pointing at the same core
+drivers: autoregressive persistence, solar radiation with its clear
+interaction with the hour of day, and the weekly demand cycle.
+
+The pipeline is intentionally minimal --- one bidding zone, one
+battery, one cycle per day --- because the goal was methodological
+clarity. Scaling it up to a real operator's stack is an engineering
+exercise; the ML and DFL foundations shown here are the non-obvious
+part, and they generalize.
+
+\end{document}
