@@ -63,7 +63,6 @@ and is not claimed anymore.
 ```
 .
 ├── main_restructured.ipynb          # End-to-end pipeline (ingestion → DFL evaluation)
-├── Feature_Selection_Module.ipynb   # Permutation importance, SHAP, Boruta, minimal-set
 ├── Final_Report.tex                 # LaTeX source for the report
 ├── images/                          # Plots saved by the notebooks
 ├── requirements.txt
@@ -97,10 +96,6 @@ Open-Meteo does not require a key.
    create the `images/` directory, fetch 2019–2025 data, train the
    autoencoder, the XGBoost forecaster, and both PFL / DFL policies, and
    save plots in `images/`.
-2. Open `Feature_Selection_Module.ipynb` in the **same kernel** (so the
-   `model_xgb`, `X_train`, etc. are already in memory) and run it. It
-   will produce the permutation-importance bars, aggregated SHAP, the
-   Boruta report, and the minimal-set RMSE curve.
 3. Read `Final_Report.pdf` for the written narrative.
 
 ## Known limitations
@@ -110,9 +105,6 @@ Open-Meteo does not require a key.
   MILP; the DFL principle carries over but the training loop would need a
   differentiable solver or a black-box surrogate.
 - **Single bidding zone.** IT_NORD only. No cross-zonal arbitrage.
-- **Scalar LCOS.** Fixed at 15 €/MWh, consistent with published figures for
-  lithium-ion Megapacks. A sensitivity sweep on $C_{deg}$ is a natural
-  next step.
 - **Day-ahead only.** The intra-day and balancing markets, often more
   volatile than day-ahead, are out of scope.
 
